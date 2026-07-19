@@ -1,0 +1,1061 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+
+// ---------- Design tokens ----------
+const INK = '#1B2A4A';
+const PAPER = '#F6F1E4';
+const PAPER_DARK = '#EAE2CC';
+const STAMP = '#B8433C';
+const GREEN = '#3A6B4F';
+const MUTED = '#8B8267';
+const LINE = '#D8CFB4';
+
+const SUBJECTS = [
+  { id: 'reasoning', label: 'General Intelligence & Reasoning', short: 'Reasoning' },
+  { id: 'math', label: 'Mathematics / Quantitative Aptitude', short: 'Math' },
+  { id: 'english', label: 'English Language', short: 'English' },
+  { id: 'history', label: 'GK — History', short: 'History' },
+  { id: 'political', label: 'GK — Polity / Political', short: 'Political' },
+  { id: 'economy', label: 'GK — Economy', short: 'Economy' },
+  { id: 'geography', label: 'GK — Geography', short: 'Geography' },
+  { id: 'static', label: 'GK — Static GK', short: 'Static GK' },
+  { id: 'current', label: 'GK — Current Affairs', short: 'Current Affairs' },
+];
+
+// Storage is sharded per subject (one key per subject) so each subject gets
+// its own 5MB budget instead of sharing a single key — this raises total
+// safe capacity to roughly 20,000+ questions per subject (80,000+ overall).
+const STORAGE_PREFIX = 'ssc-mock-bank-v2-';
+const storageKeyFor = (subjectId) => `${STORAGE_PREFIX}${subjectId}`;
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60).toString().padStart(2, '0');
+  const sec = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+
+// ---------- Root ----------
+export default function App() {
+  const [screen, setScreen] = useState('home'); // home | add | manage | setup | test | result
+  const [questions, setQuestions] = useState(null); // null = loading
+  const [loadError, setLoadError] = useState(false);
+  const [activeSubject, setActiveSubject] = useState(SUBJECTS[0].id);
+  const [testConfig, setTestConfig] = useState(null);
+  const [testResult, setTestResult] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const results = await Promise.all(
+          SUBJECTS.map(async (s) => {
+            try {
+              const res = await window.storage.get(storageKeyFor(s.id));
+              return res ? JSON.parse(res.value) : [];
+            } catch (e) {
+              return []; // key doesn't exist yet — fine, subject has no questions
+            }
+          })
+        );
+        setQuestions(results.flat());
+      } catch (e) {
+        setQuestions([]);
+      }
+    })();
+  }, []);
+
+  // Writes only the affected subject's key — other subjects' data (and their
+  // own 5MB budget) are untouched.
+  const persistSubject = useCallback(async (subjectId, subjectArray) => {
+    try {
+      const ok = await window.storage.set(storageKeyFor(subjectId), JSON.stringify(subjectArray));
+      if (!ok) setLoadError(true);
+    } catch (e) {
+      setLoadError(true);
+    }
+  }, []);
+
+  const addQuestion = (q) => {
+    const newQ = { ...q, id: uid() };
+    const next = [...(questions || []), newQ];
+    setQuestions(next);
+    const subjectArray = next.filter((x) => x.subject === q.subject);
+    persistSubject(q.subject, subjectArray);
+  };
+// Adds many questions at once (from Bulk Import). Groups by subject so each
+  // affected subject's key is written only once, no matter how many questions.
+  const addQuestions = (list) => {
+    const withIds = list.map((q) => ({ ...q, id: uid() }));
+    const next = [...(questions || []), ...withIds];
+    setQuestions(next);
+    const touchedSubjects = [...new Set(withIds.map((q) => q.subject))];
+    touchedSubjects.forEach((subjectId) => {
+      persistSubject(subjectId, next.filter((x) => x.subject === subjectId));
+    });
+  };
+
+  const deleteQuestion = (id) => {
+    const target = (questions || []).find((q) => q.id === id);
+    if (!target) return;
+    const next = (questions || []).filter((q) => q.id !== id);
+    setQuestions(next);
+    const subjectArray = next.filter((x) => x.subject === target.subject);
+    persistSubject(target.subject, subjectArray);
+  };
+
+  const startTest = (config) => {
+    setTestConfig(config);
+    setScreen('test');
+  };
+
+  const finishTest = (result) => {
+    setTestResult(result);
+    setScreen('result');
+  };
+
+  if (questions === null) {
+    return (
+      <div style={{ background: PAPER, minHeight: '100vh' }} className="flex items-center justify-center">
+        <p style={{ color: MUTED, fontFamily: 'Georgia, serif' }}>Loading question bank…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: PAPER, minHeight: '100vh', fontFamily: 'Georgia, "Times New Roman", serif' }}>
+      <TopBar screen={screen} setScreen={setScreen} />
+      {loadError && (
+        <div style={{ background: '#FCEAE8', color: STAMP, borderBottom: `1px solid ${STAMP}` }} className="text-xs px-4 py-2 text-center">
+          Could not save to storage — your changes may not persist this session.
+        </div>
+      )}
+      <div className="max-w-md mx-auto px-4 pb-16">
+        {screen === 'home' && (
+          <Home questions={questions} setScreen={setScreen} setActiveSubject={setActiveSubject} />
+        )}
+        {screen === 'add' && (
+          <AddQuestion onAdd={addQuestion} defaultSubject={activeSubject} />
+        )}
+        {screen === 'bulk' && (
+          <BulkImport onImport={addQuestions} defaultSubject={activeSubject} />
+        )}
+        {screen === 'manage' && (
+          <ManageQuestions questions={questions} onDelete={deleteQuestion} />
+        )}
+        {screen === 'setup' && (
+          <SetupTest
+            questions={questions}
+            activeSubject={activeSubject}
+            setActiveSubject={setActiveSubject}
+            onStart={startTest}
+          />
+        )}
+        {screen === 'test' && testConfig && (
+          <TestRunner config={testConfig} onFinish={finishTest} onAbort={() => setScreen('home')} />
+        )}
+        {screen === 'result' && testResult && (
+          <Result result={testResult} onHome={() => setScreen('home')} onRetry={() => setScreen('setup')} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ screen, setScreen }) {
+  const titles = {
+    home: 'Mock Test',
+    add: 'Add Question',
+    bulk: 'Bulk Import',
+    manage: 'Question Bank',
+    setup: 'Start Mock Test',
+    test: 'Test in Progress',
+    result: 'Result',
+};
+  return (
+    <div style={{ background: INK, color: PAPER, borderBottom: `3px double ${STAMP}` }} className="px-4 py-4 sticky top-0 z-10">
+      <div className="max-w-md mx-auto flex items-center justify-between">
+        <div>
+          <div style={{ letterSpacing: '0.12em', color: '#C9BE9D', fontSize: '10px' }} className="uppercase">Offline Practice</div>
+          <h1 style={{ fontSize: '20px', fontWeight: 700 }}>{titles[screen]}</h1>
+        </div>
+        {screen !== 'home' && screen !== 'test' && (
+          <button
+            onClick={() => setScreen('home')}
+            style={{ border: `1px solid ${PAPER}`, color: PAPER }}
+            className="text-xs px-3 py-1.5 rounded-sm"
+          >
+            ← Home
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Home ----------
+function Home({ questions, setScreen, setActiveSubject }) {
+  const counts = SUBJECTS.map((s) => ({
+    ...s,
+    count: questions.filter((q) => q.subject === s.id).length,
+  }));
+  const total = questions.length;
+
+  return (
+    <div className="pt-6">
+      <div style={{ borderBottom: `1px solid ${LINE}` }} className="pb-4 mb-5">
+        <p style={{ color: MUTED }} className="text-sm">
+          {total === 0
+            ? 'No questions added yet. Build your own bank first.'
+            : `${total} question${total === 1 ? '' : 's'} in your bank, across ${SUBJECTS.length} subjects.`}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mb-6">
+        {counts.map((s) => (
+          <div
+            key={s.id}
+            style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }}
+            className="rounded-sm p-2.5"
+          >
+            <div style={{ color: INK, fontWeight: 700, fontSize: '12px', lineHeight: 1.2 }}>{s.short}</div>
+            <div style={{ color: STAMP, fontSize: '19px', fontWeight: 700, fontFamily: 'Georgia, serif' }}>{s.count}</div>
+            <div style={{ color: MUTED, fontSize: '10px' }}>question{s.count === 1 ? '' : 's'}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3">
+        <ActionButton
+          label="Start a mock test"
+          sub="Pick subject, question count & time"
+          primary
+          onClick={() => setScreen('setup')}
+        />
+        <ActionButton
+          label="Add a question"
+          sub="Add to your own bank, one at a time"
+          onClick={() => setScreen('add')}
+        />
+        <ActionButton
+          label="Bulk import questions"
+          sub="Paste many questions at once"
+          onClick={() => setScreen('bulk')}
+        />
+        <ActionButton
+          label="Manage question bank"
+          sub="View or delete saved questions"
+          onClick={() => setScreen('manage')}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ActionButton({ label, sub, onClick, primary }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        background: primary ? INK : PAPER,
+        color: primary ? PAPER : INK,
+        border: `1px solid ${primary ? INK : LINE}`,
+      }}
+      className="rounded-sm px-4 py-3 flex items-center justify-between"
+    >
+      <div>
+        <div style={{ fontWeight: 700, fontSize: '15px' }}>{label}</div>
+        <div style={{ fontSize: '11px', opacity: 0.75 }}>{sub}</div>
+      </div>
+      <span style={{ fontSize: '18px' }}>→</span>
+    </button>
+  );// ---------- Add Question ----------
+function AddQuestion({ onAdd, defaultSubject }) {
+  const [subject, setSubject] = useState(defaultSubject || SUBJECTS[0].id);
+  const [chapter, setChapter] = useState('');
+  const [question, setQuestion] = useState('');
+  const [options, setOptions] = useState(['', '', '', '']);
+  const [correct, setCorrect] = useState(0);
+  const [savedFlash, setSavedFlash] = useState(false);
+
+  const canSave = question.trim() && options.every((o) => o.trim());
+
+  const setOpt = (i, v) => {
+    const next = [...options];
+    next[i] = v;
+    setOptions(next);
+  };
+
+  const handleSave = () => {
+    if (!canSave) return;
+    onAdd({
+      subject,
+      chapter: chapter.trim() || 'General',
+      question: question.trim(),
+      options: options.map((o) => o.trim()),
+      correctIndex: correct,
+    });
+    setQuestion('');
+    setOptions(['', '', '', '']);
+    setChapter('');
+    setCorrect(0);
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 1600);
+  };
+
+  return (
+    <div className="pt-6 pb-6">
+      <Field label="Subject">
+        <select
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+          className="w-full px-3 py-2 rounded-sm text-sm"
+        >
+          {SUBJECTS.map((s) => (
+            <option key={s.id} value={s.id}>{s.label}</option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Chapter / Topic (optional)">
+        <input
+          value={chapter}
+          onChange={(e) => setChapter(e.target.value)}
+          placeholder="e.g. Modern History, Percentage, Series"
+          style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+          className="w-full px-3 py-2 rounded-sm text-sm"
+        />
+      </Field>
+
+      <Field label="Question">
+        <textarea
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          rows={3}
+          placeholder="Type the question here"
+          style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+          className="w-full px-3 py-2 rounded-sm text-sm"
+        />
+      </Field>
+
+      <Field label="Options (mark the correct one)">
+        <div className="space-y-2">
+          {options.map((opt, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <button
+                onClick={() => setCorrect(i)}
+                style={{
+                  width: 26, height: 26, borderRadius: '50%',
+                  border: `2px solid ${correct === i ? GREEN : LINE}`,
+                  background: correct === i ? GREEN : 'transparent',
+                  color: correct === i ? PAPER : MUTED,
+                  flexShrink: 0,
+                }}
+                className="text-xs font-bold"
+                aria-label={`Mark option ${i + 1} correct`}
+              >
+                {String.fromCharCode(65 + i)}
+              </button>
+              <input
+                value={opt}
+                onChange={(e) => setOpt(i, e.target.value)}
+                placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+                className="flex-1 px-3 py-2 rounded-sm text-sm"
+              />
+            </div>
+          ))}
+        </div>
+      </Field>
+<button
+        onClick={handleSave}
+        disabled={!canSave}
+        style={{
+          width: '100%',
+          background: canSave ? STAMP : LINE,
+          color: canSave ? PAPER : MUTED,
+        }}
+        className="rounded-sm px-4 py-3 font-bold text-sm mt-2"
+      >
+        {savedFlash ? 'Saved ✓' : 'Save question'}
+      </button>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div className="mb-4">
+      <label style={{ color: MUTED, fontSize: '11px', letterSpacing: '0.06em' }} className="uppercase block mb-1.5">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+// ---------- Bulk Import ----------
+const TEMPLATE = `Q: 20 ka 15% kitna hota hai?
+A) 2
+B) 3
+C) 4
+D) 5
+Ans: B
+
+Q: Bharat ka pehla President kaun tha?
+A) Nehru
+B) Rajendra Prasad
+C) Gandhi
+D) Patel
+Ans: B`;
+
+// Parses pasted text into question objects. Each block is separated by a
+// blank line. Recognises "Q:", "A)"/"B)"/"C)"/"D)" (also "A." or "(A)"),
+// and "Ans:" (also "Answer:"/"Correct:"). Returns { parsed, errors }.
+function parseBulkText(text, defaultSubject, defaultChapter) {
+  const blocks = text
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+
+  const parsed = [];
+  const errors = [];
+
+  blocks.forEach((block, blockIdx) => {
+    const lines = block.split('\n').map((l) => l.trim()).filter(Boolean);
+    let subject = defaultSubject;
+    let chapter = defaultChapter || 'General';
+    let question = null;
+    const opts = {};
+    let ans = null;
+
+    lines.forEach((line) => {
+      let m;
+      if ((m = line.match(/^subject\s*:\s*(.+)$/i))) {
+        const found = SUBJECTS.find(
+          (s) => s.id === m[1].trim().toLowerCase() || s.short.toLowerCase() === m[1].trim().toLowerCase()
+        );
+        if (found) subject = found.id;
+      } else if ((m = line.match(/^chapter\s*:\s*(.+)$/i))) {
+        chapter = m[1].trim();
+      } else if ((m = line.match(/^q(?:uestion)?\s*[:.]\s*(.+)$/i))) {
+        question = m[1].trim();
+      } else if ((m = line.match(/^\(?([a-dA-D])\)?[.):]\s*(.+)$/))) {
+        opts[m[1].toUpperCase()] = m[2].trim();
+      } else if ((m = line.match(/^(?:ans|answer|correct)\s*:\s*\(?([a-dA-D])\)?/i))) {
+        ans = m[1].toUpperCase();
+      }
+    });
+
+    const optionList = ['A', 'B', 'C', 'D'].map((k) => opts[k]);
+    const missing = [];
+    if (!question) missing.push('question (Q:)');
+    ['A', 'B', 'C', 'D'].forEach((k) => { if (!opts[k]) missing.push(`option ${k}`); });
+    if (!ans) missing.push('answer (Ans:)');
+    else if (!opts[ans]) missing.push(`Ans: ${ans} doesn't match any option given`);
+
+    if (missing.length) {
+      errors.push({ blockIdx: blockIdx + 1, preview: block.slice(0, 60), missing });
+      return;
+    }
+
+    parsed.push({
+      subject,
+      chapter,
+      question,
+      options: optionList,
+      correctIndex: ['A', 'B', 'C', 'D'].indexOf(ans),
+    });
+  });
+
+  return { parsed, errors };
+}
+
+function BulkImport({ onImport, defaultSubject }) {
+  const [subject, setSubject] = useState(defaultSubject || SUBJECTS[0].id);
+  const [chapter, setChapter] = useState('');
+  const [text, setText] = useState('');
+  const [preview, setPreview] = useState(null); // { parsed, errors }
+  const [done, setDone] = useState(false);
+
+  const handleParse = () => {
+    setDone(false);
+    setPreview(parseBulkText(text, subject, chapter));
+  };
+
+  const handleImport = () => {
+    if (!preview || preview.parsed.length === 0) return;
+    onImport(preview.parsed);
+    setDone(true);
+    setText('');
+    setPreview(null);
+  };
+
+  return (
+    <div className="pt-6 pb-8">
+      <div style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-3 mb-4">
+        <div style={{ color: INK, fontWeight: 700, fontSize: '12px' }} className="mb-1.5">Format (copy & reuse):</div>
+        <pre style={{ color: MUTED, fontSize: '11px', whiteSpace: 'pre-wrap' }}>{TEMPLATE}</pre>
+        <div style={{ color: MUTED, fontSize: '10.5px' }} className="mt-2">
+          Do questions ke beech ek khali line chodo. "Subject:" aur "Chapter:" line bhi har question ke andar likh sakte ho (optional) — warna neeche chuna hua subject/chapter use hoga.
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        <div>
+          <label style={{ color: MUTED, fontSize: '11px' }} className="uppercase block mb-1.5">Default subject</label>
+          <select
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+            className="w-full px-2 py-2 rounded-sm text-xs"
+          >
+            {SUBJECTS.map((s) => (
+              <option key={s.id} value={s.id}>{s.short}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={{ color: MUTED, fontSize: '11px' }} className="uppercase block mb-1.5">Default chapter</label>
+          <input
+            value={chapter}
+            onChange={(e) => setChapter(e.target.value)}
+            placeholder="optional"
+            style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+            className="w-full px-2 py-2 rounded-sm text-xs"
+          />
+        </div>
+      </div>
+
+      <Field label="Paste your questions here">
+        <textarea
+          value={text}
+          onChange={(e) => { setText(e.target.value); setPreview(null); setDone(false); }}
+          rows={10}
+          placeholder={TEMPLATE}
+          style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK, fontSize: '13px' }}
+          className="w-full px-3 py-2 rounded-sm"
+        />
+      </Field>
+
+      {done && (
+        <div style={{ background: '#EAF4EC', border: `1px solid ${GREEN}`, color: GREEN }} className="rounded-sm p-3 text-sm mb-4">
+          Import ho gaya ✓
+        </div>
+      )}
+
+      {!preview && (
+        <button
+          onClick={handleParse}
+          disabled={!text.trim()}
+          style={{ width: '100%', background: text.trim() ? INK : LINE, color: text.trim() ? PAPER : MUTED }}
+          className="rounded-sm px-4 py-3 font-bold text-sm"
+        >
+          Check / Preview
+        </button>
+      )}
+
+      {preview && (
+        <>
+          <div className="flex gap-2 mb-3">
+            <div style={{ background: '#EAF4EC', border: `1px solid ${GREEN}`, color: GREEN }} className="flex-1 rounded-sm p-2 text-center text-xs font-bold">
+              {preview.parsed.length} sahi mile
+            </div>
+            {preview.errors.length > 0 && (
+              <div style={{ background: '#FCEAE8', border: `1px solid ${STAMP}`, color: STAMP }} className="flex-1 rounded-sm p-2 text-center text-xs font-bold">
+                {preview.errors.length} mein problem
+              </div>
+            )}
+          </div>
+
+          {preview.errors.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {preview.errors.map((e) => (
+                <div key={e.blockIdx} style={{ background: '#FCEAE8', border: `1px solid ${STAMP}` }} className="rounded-sm p-2">
+                  <div style={{ color: STAMP, fontSize: '11px', fontWeight: 700 }}>Block {e.blockIdx}: "{e.preview}…"</div>
+                  <div style={{ color: STAMP, fontSize: '11px' }}>Missing: {e.missing.join(', ')}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {preview.parsed.length > 0 && (
+            <div className="space-y-2 mb-4">
+              {preview.parsed.slice(0, 5).map((q, i) => (
+                <div key={i} style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-2.5">
+                  <div style={{ color: MUTED, fontSize: '10px' }} className="uppercase mb-1">
+                    {SUBJECTS.find((s) => s.id === q.subject)?.short} · {q.chapter}
+                  </div>
+                  <div style={{ color: INK, fontSize: '12px', fontWeight: 700 }}>{q.question}</div>
+                  <div style={{ color: GREEN, fontSize: '11px' }}>✓ {String.fromCharCode(65 + q.correctIndex)}. {q.options[q.correctIndex]}</div>
+                </div>
+              ))}
+              {preview.parsed.length > 5 && (
+                <div style={{ color: MUTED, fontSize: '11px' }} className="text-center">…aur {preview.parsed.length - 5} questions</div>
+              )}
+            </div>
+)}
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPreview(null)}
+              style={{ border: `1px solid ${LINE}`, color: MUTED }}
+              className="flex-1 rounded-sm px-4 py-2.5 text-sm"
+            >
+              Wapas edit karo
+            </button>
+            <button
+              onClick={handleImport}
+              disabled={preview.parsed.length === 0}
+              style={{ background: preview.parsed.length ? STAMP : LINE, color: preview.parsed.length ? PAPER : MUTED }}
+              className="flex-1 rounded-sm px-4 py-2.5 text-sm font-bold"
+            >
+              {preview.parsed.length} import karo
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------- Manage Questions ----------
+const PAGE_SIZE = 50;
+
+function ManageQuestions({ questions, onDelete }) {
+  const [filter, setFilter] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const filtered = filter === 'all' ? questions : questions.filter((q) => q.subject === filter);
+  const visible = filtered.slice(0, visibleCount);
+
+  const changeFilter = (f) => {
+    setFilter(f);
+    setVisibleCount(PAGE_SIZE);
+  };
+
+  return (
+    <div className="pt-6">
+      <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+        <Chip active={filter === 'all'} onClick={() => changeFilter('all')} label={`All (${questions.length})`} />
+        {SUBJECTS.map((s) => (
+          <Chip
+            key={s.id}
+            active={filter === s.id}
+            onClick={() => changeFilter(s.id)}
+            label={`${s.short} (${questions.filter((q) => q.subject === s.id).length})`}
+          />
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <p style={{ color: MUTED }} className="text-sm text-center py-10">No questions here yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {visible.map((q) => (
+            <div key={q.id} style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1">
+                  <div style={{ color: MUTED, fontSize: '10px' }} className="uppercase mb-1">
+                    {SUBJECTS.find((s) => s.id === q.subject)?.short} · {q.chapter}
+                  </div>
+                  <div style={{ color: INK, fontWeight: 700, fontSize: '13px' }}>{q.question}</div>
+                  <div style={{ color: GREEN, fontSize: '12px' }} className="mt-1">
+                    ✓ {String.fromCharCode(65 + q.correctIndex)}. {q.options[q.correctIndex]}
+                  </div>
+                </div>
+                <button
+                  onClick={() => onDelete(q.id)}
+                  style={{ color: STAMP, border: `1px solid ${STAMP}` }}
+                  className="text-xs px-2 py-1 rounded-sm flex-shrink-0"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+          {visibleCount < filtered.length && (
+            <button
+              onClick={() => setVisibleCount((v) => v + PAGE_SIZE)}
+              style={{ border: `1px solid ${LINE}`, color: MUTED }}
+              className="w-full rounded-sm px-4 py-2.5 text-sm"
+            >
+              Load {Math.min(PAGE_SIZE, filtered.length - visibleCount)} more (showing {visible.length} of {filtered.length})
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Chip({ active, onClick, label }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: active ? INK : 'transparent',
+        color: active ? PAPER : INK,
+        border: `1px solid ${INK}`,
+        whiteSpace: 'nowrap',
+      }}
+      className="text-xs px-3 py-1.5 rounded-full flex-shrink-0"
+    >
+      {label}
+    </button>
+  );
+}
+
+// ---------- Setup Test ----------
+function SetupTest({ questions, activeSubject, setActiveSubject, onStart }) {
+  const available = questions.filter((q) => q.subject === activeSubject).length;
+  const [numQ, setNumQ] = useState(10);
+  const [minutes, setMinutes] = useState(10);
+
+  const maxQ = Math.max(available, 1);
+
+  return (
+    <div className="pt-6">
+      <Field label="Subject">
+        <div className="grid grid-cols-3 gap-2">
+          {SUBJECTS.map((s) => {
+            const cnt = questions.filter((q) => q.subject === s.id).length;
+            const active = activeSubject === s.id;
+            return (
+              <button
+                key={s.id}
+                onClick={() => setActiveSubject(s.id)}
+                style={{
+                  background: active ? INK : PAPER,
+                  color: active ? PAPER : INK,
+                  border: `1px solid ${active ? INK : LINE}`,
+                }}
+                className="rounded-sm px-2 py-2 text-left"
+              >
+                <div style={{ fontWeight: 700, fontSize: '11.5px', lineHeight: 1.2 }}>{s.short}</div>
+                <div style={{ fontSize: '10px', opacity: 0.75 }}>{cnt} available</div>
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      {available === 0 ? (
+        <div style={{ background: '#FCEAE8', border: `1px solid ${STAMP}`, color: STAMP }} className="rounded-sm p-3 text-sm">
+          No questions in this subject yet. Add some first from the home screen.
+        </div>
+      ) : (
+        <>
+          <Field label={`Number of questions (max ${maxQ})`}>
+            <input
+              type="number"
+              min={1}
+              max={maxQ}
+              value={numQ}
+              onChange={(e) => setNumQ(Math.max(1, Math.min(maxQ, Number(e.target.value) || 1)))}
+              style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+              className="w-full px-3 py-2 rounded-sm text-sm"
+            />
+          </Field>
+
+          <Field label="Time limit (minutes)">
+            <input
+              type="number"
+              min={1}
+              value={minutes}
+              onChange={(e) => setMinutes(Math.max(1, Number(e.target.value) || 1))}
+              style={{ background: PAPER, border: `1px solid ${LINE}`, color: INK }}
+              className="w-full px-3 py-2 rounded-sm text-sm"
+            />
+          </Field>
+
+          <button
+            onClick={() =>
+              onStart({
+                subject: activeSubject,
+                numQ,
+                seconds: minutes * 60,
+                pool: questions.filter((q) => q.subject === activeSubject),
+              })
+            }
+            style={{ width: '100%', background: STAMP, color: PAPER }}
+            className="rounded-sm px-4 py-3 font-bold text-sm mt-2"
+          >
+            Begin test
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------- Test Runner ----------
+// Shuffles a question's options and remaps correctIndex to match the new order.
+function shuffleOptions(q) {
+  const order = shuffle([0, 1, 2, 3]); // order[newPos] = oldPos
+  const newOptions = order.map((oldPos) => q.options[oldPos]);
+  const newCorrectIndex = order.indexOf(q.correctIndex);
+  return { ...q, options: newOptions, correctIndex: newCorrectIndex };
+}
+
+function TestRunner({ config, onFinish, onAbort }) {
+  const [picked] = useState(() => shuffle(config.pool).slice(0, config.numQ).map(shuffleOptions));
+  const [idx, setIdx] = useState(0);
+  const [answers, setAnswers] = useState({}); // qid -> selected index
+  const [secondsLeft, setSecondsLeft] = useState(config.seconds);
+  const finishedRef = useRef(false);
+
+  const handleFinish = useCallback(() => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    let correct = 0, wrong = 0, unattempted = 0;
+    const review = picked.map((q) => {
+      const sel = answers[q.id];
+      if (sel === undefined) unattempted++;
+      else if (sel === q.correctIndex) correct++;
+      else wrong++;
+      return { ...q, selected: sel };
+    });
+    onFinish({
+      subject: config.subject,
+      total: picked.length,
+      correct,
+      wrong,
+      unattempted,
+      review,
+      timeTaken: config.seconds - secondsLeft,
+    });
+  }, [answers, picked, config, secondsLeft, onFinish]);
+
+  useEffect(() => {
+    if (secondsLeft <= 0) {
+      handleFinish();
+      return;
+    }
+    const t = setInterval(() => setSecondsLeft((s) => s - 1), 1000);
+    return () => clearInterval(t);
+  }, [secondsLeft, handleFinish]);
+
+  const q = picked[idx];
+  const low = secondsLeft <= 30;
+
+  if (!q) {
+    return <p style={{ color: MUTED }} className="text-center pt-10">No questions available.</p>;
+  }
+
+  return (
+    <div className="pt-6 pb-8">
+      <div className="flex items-center justify-between mb-4">
+        <div style={{ color: MUTED, fontSize: '12px' }}>
+          Question {idx + 1} of {picked.length}
+        </div>
+        <div
+          style={{
+            background: low ? STAMP : INK,
+            color: PAPER,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+          className="px-3 py-1 rounded-sm text-sm font-bold"
+        >
+          ⏱ {fmtTime(secondsLeft)}
+        </div>
+      </div>
+<div style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-4 mb-4">
+        <div style={{ color: MUTED, fontSize: '10px' }} className="uppercase mb-2">{q.chapter}</div>
+        <p style={{ color: INK, fontSize: '15px', fontWeight: 700, lineHeight: 1.4 }}>{q.question}</p>
+      </div>
+
+      <div className="space-y-2 mb-6">
+        {q.options.map((opt, i) => {
+          const isAnswered = answers[q.id] !== undefined;
+          const isSelected = answers[q.id] === i;
+          const isCorrectOpt = i === q.correctIndex;
+
+          let bg = PAPER, color = INK, border = LINE, badge = null;
+          if (isAnswered) {
+            if (isCorrectOpt) {
+              bg = GREEN; color = PAPER; border = GREEN; badge = '✓';
+            } else if (isSelected) {
+              bg = STAMP; color = PAPER; border = STAMP; badge = '✗';
+            } else {
+              color = MUTED;
+            }
+          } else if (isSelected) {
+            bg = INK; color = PAPER; border = INK;
+          }
+
+          return (
+            <button
+              key={i}
+              onClick={() => {
+                if (isAnswered) return; // lock after first pick
+                setAnswers((a) => ({ ...a, [q.id]: i }));
+              }}
+              style={{ width: '100%', textAlign: 'left', background: bg, color, border: `1px solid ${border}` }}
+              className="rounded-sm px-3 py-2.5 flex items-center gap-3"
+            >
+              <span
+                style={{
+                  width: 22, height: 22, borderRadius: '50%',
+                  border: `1.5px solid ${bg === PAPER ? MUTED : color}`,
+                  fontSize: '11px',
+                }}
+                className="flex items-center justify-center font-bold flex-shrink-0"
+              >
+                {String.fromCharCode(65 + i)}
+              </span>
+              <span style={{ fontSize: '13px' }} className="flex-1">{opt}</span>
+              {badge && <span style={{ fontSize: '14px', fontWeight: 700 }}>{badge}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {answers[q.id] !== undefined && (
+        <div
+          style={{
+            color: answers[q.id] === q.correctIndex ? GREEN : STAMP,
+            fontSize: '12px',
+            fontWeight: 700,
+          }}
+          className="mb-4 -mt-3"
+        >
+          {answers[q.id] === q.correctIndex
+            ? 'Correct!'
+            : `Wrong — correct answer is ${String.fromCharCode(65 + q.correctIndex)}`}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button
+          onClick={() => setIdx((i) => Math.max(0, i - 1))}
+          disabled={idx === 0}
+          style={{ border: `1px solid ${LINE}`, color: idx === 0 ? LINE : INK }}
+          className="px-4 py-2 rounded-sm text-sm flex-1"
+        >
+          ← Prev
+        </button>
+        {idx < picked.length - 1 ? (
+          <button
+            onClick={() => setIdx((i) => i + 1)}
+            style={{ background: INK, color: PAPER }}
+            className="px-4 py-2 rounded-sm text-sm flex-1 font-bold"
+          >
+            Next →
+          </button>
+        ) : (
+          <button
+            onClick={handleFinish}
+            style={{ background: STAMP, color: PAPER }}
+            className="px-4 py-2 rounded-sm text-sm flex-1 font-bold"
+          >
+            Submit
+          </button>
+        )}
+      </div>
+
+      <button onClick={onAbort} style={{ color: MUTED }} className="text-xs w-full text-center mt-4 underline">
+        Abort test without saving score
+      </button>
+    </div>
+  );
+}
+
+// ---------- Result ----------
+function Result({ result, onHome, onRetry }) {
+  const { total, correct, wrong, unattempted, review, timeTaken } = result;
+  const marks = correct - wrong * 0.25; // SSC-style negative marking, adjust as needed visually
+  const pct = total ? Math.round((correct / total) * 100) : 0;
+  const [showReview, setShowReview] = useState(false);
+
+  return (
+    <div className="pt-6 pb-10">
+      <div style={{ background: INK, color: PAPER }} className="rounded-sm p-5 text-center mb-5">
+        <div style={{ color: '#C9BE9D', fontSize: '11px' }} className="uppercase tracking-widest">
+          {SUBJECTS.find((s) => s.id === result.subject)?.short}
+        </div>
+        <div style={{ fontSize: '42px', fontWeight: 700, fontFamily: 'Georgia, serif' }}>{marks.toFixed(2)}</div>
+        <div style={{ color: '#C9BE9D', fontSize: '12px' }}>marks out of {total} · {pct}%</div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        <Stat label="Correct" value={correct} color={GREEN} />
+        <Stat label="Wrong" value={wrong} color={STAMP} />
+        <Stat label="Skipped" value={unattempted} color={MUTED} />
+      </div>
+
+      <div style={{ color: MUTED, fontSize: '12px' }} className="text-center mb-6">
+        Time taken: {fmtTime(timeTaken)}
+      </div>
+
+      <button
+        onClick={() => setShowReview((v) => !v)}
+        style={{ border: `1px solid ${INK}`, color: INK }}
+        className="w-full rounded-sm px-4 py-2.5 text-sm font-bold mb-3"
+      >
+        {showReview ? 'Hide answer review' : 'Show answer review'}
+      </button>
+
+      {showReview && (
+        <div className="space-y-3 mb-6">
+          {review.map((q, i) => {
+            const status = q.selected === undefined ? 'skip' : q.selected === q.correctIndex ? 'right' : 'wrong';
+            return (
+              <div key={q.id} style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-3">
+                <div style={{ color: MUTED, fontSize: '10px' }} className="uppercase mb-1">Q{i + 1} · {q.chapter}</div>
+                <div style={{ color: INK, fontWeight: 700, fontSize: '13px' }} className="mb-2">{q.question}</div>
+                {q.options.map((opt, oi) => {
+                  const isCorrect = oi === q.correctIndex;
+                  const isSelected = oi === q.selected;
+                  let color = INK, bg = 'transparent';
+                  if (isCorrect) { color = GREEN; }
+                  if (isSelected && !isCorrect) { color = STAMP; }
+                  return (
+                    <div key={oi} style={{ color, fontSize: '12px' }} className="py-0.5">
+                      {String.fromCharCode(65 + oi)}. {opt}
+                      {isCorrect ? '  ✓' : isSelected ? '  ✗' : ''}
+                    </div>
+                  );
+                })}
+                {status === 'skip' && <div style={{ color: MUTED, fontSize: '11px' }} className="mt-1">Not attempted</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button onClick={onRetry} style={{ background: STAMP, color: PAPER }} className="flex-1 rounded-sm px-4 py-3 text-sm font-bold">
+          New test
+        </button>
+        <button onClick={onHome} style={{ border: `1px solid ${INK}`, color: INK }} className="flex-1 rounded-sm px-4 py-3 text-sm font-bold">
+          Home
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value, color }) {
+  return (
+    <div style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-3 text-center">
+      <div style={{ color, fontSize: '22px', fontWeight: 700, fontFamily: 'Georgia, serif' }}>{value}</div>
+      <div style={{ color: MUTED, fontSize: '10px' }} className="uppercase">{label}</div>
+    </div>
+  );
+}
+
+
+}
