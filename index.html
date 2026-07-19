@@ -1,3 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>SSC Mock Test</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1B2A4A">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+  // ---- Storage shim: mimics the async key-value storage API the app was
+  // originally written against, but backed by the browser's localStorage so
+  // it works on any normal website (GitHub Pages included). ----
+  window.storage = {
+    get: async (key) => {
+      const v = localStorage.getItem(key);
+      return v === null ? null : { key, value: v, shared: false };
+    },
+    set: async (key, value) => {
+      try {
+        localStorage.setItem(key, value);
+        return { key, value, shared: false };
+      } catch (e) {
+        return null;
+      }
+    },
+    delete: async (key) => {
+      localStorage.removeItem(key);
+      return { key, deleted: true, shared: false };
+    },
+    list: async (prefix) => {
+      const keys = Object.keys(localStorage).filter((k) => !prefix || k.startsWith(prefix));
+      return { keys, prefix, shared: false };
+    },
+  };
+</script>
+
+<script type="text/babel" data-presets="react">
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 // ---------- Design tokens ----------
@@ -47,7 +95,7 @@ function fmtTime(s) {
 }
 
 // ---------- Root ----------
-export default function App() {
+function App() {
   const [screen, setScreen] = useState('home'); // home | add | manage | setup | test | result
   const [questions, setQuestions] = useState(null); // null = loading
   const [loadError, setLoadError] = useState(false);
@@ -93,7 +141,8 @@ export default function App() {
     const subjectArray = next.filter((x) => x.subject === q.subject);
     persistSubject(q.subject, subjectArray);
   };
-// Adds many questions at once (from Bulk Import). Groups by subject so each
+
+  // Adds many questions at once (from Bulk Import). Groups by subject so each
   // affected subject's key is written only once, no matter how many questions.
   const addQuestions = (list) => {
     const withIds = list.map((q) => ({ ...q, id: uid() }));
@@ -181,7 +230,7 @@ function TopBar({ screen, setScreen }) {
     setup: 'Start Mock Test',
     test: 'Test in Progress',
     result: 'Result',
-};
+  };
   return (
     <div style={{ background: INK, color: PAPER, borderBottom: `3px double ${STAMP}` }} className="px-4 py-4 sticky top-0 z-10">
       <div className="max-w-md mx-auto flex items-center justify-between">
@@ -281,7 +330,10 @@ function ActionButton({ label, sub, onClick, primary }) {
       </div>
       <span style={{ fontSize: '18px' }}>→</span>
     </button>
-  );// ---------- Add Question ----------
+  );
+}
+
+// ---------- Add Question ----------
 function AddQuestion({ onAdd, defaultSubject }) {
   const [subject, setSubject] = useState(defaultSubject || SUBJECTS[0].id);
   const [chapter, setChapter] = useState('');
@@ -380,7 +432,8 @@ function AddQuestion({ onAdd, defaultSubject }) {
           ))}
         </div>
       </Field>
-<button
+
+      <button
         onClick={handleSave}
         disabled={!canSave}
         style={{
@@ -607,7 +660,7 @@ function BulkImport({ onImport, defaultSubject }) {
                 <div style={{ color: MUTED, fontSize: '11px' }} className="text-center">…aur {preview.parsed.length - 5} questions</div>
               )}
             </div>
-)}
+          )}
 
           <div className="flex gap-2">
             <button
@@ -872,7 +925,8 @@ function TestRunner({ config, onFinish, onAbort }) {
           ⏱ {fmtTime(secondsLeft)}
         </div>
       </div>
-<div style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-4 mb-4">
+
+      <div style={{ background: PAPER_DARK, border: `1px solid ${LINE}` }} className="rounded-sm p-4 mb-4">
         <div style={{ color: MUTED, fontSize: '10px' }} className="uppercase mb-2">{q.chapter}</div>
         <p style={{ color: INK, fontSize: '15px', fontWeight: 700, lineHeight: 1.4 }}>{q.question}</p>
       </div>
@@ -1057,5 +1111,8 @@ function Stat({ label, value, color }) {
   );
 }
 
-
-}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
