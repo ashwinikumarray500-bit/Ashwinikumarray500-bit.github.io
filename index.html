@@ -15,7 +15,22 @@
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div style="font-family: sans-serif; padding: 24px; text-align: center; color: #1B2A4A;">
+    App load ho raha hai… agar ye message 10 second se zyada dikhe to kuch galat hai.
+  </div>
+</div>
+
+<script>
+  // Show JS errors directly on the page instead of a blank white screen,
+  // so problems can be diagnosed from a phone without dev tools.
+  window.onerror = function (msg, url, line, col, error) {
+    document.getElementById('root').innerHTML =
+      '<div style="font-family: monospace; padding: 16px; color: #B8433C; white-space: pre-wrap; font-size: 13px;">' +
+      '<b>Error loading app:</b>\n\n' + msg + '\n(line ' + line + ')' +
+      '</div>';
+  };
+</script>
 
 <script>
   // ---- Storage shim: mimics the async key-value storage API the app was
